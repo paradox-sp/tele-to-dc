@@ -1,0 +1,8 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      - CONFIG_PATH=/app/data/config.yaml
