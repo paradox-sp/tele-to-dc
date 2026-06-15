@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
 import yaml
 
 
@@ -31,8 +30,8 @@ class DiscordConfig:
 @dataclass
 class Route:
     name: str
-    from_chats: List[int]
-    to_channels: List[int]
+    from_chats: list[int]
+    to_channels: list[int]
 
 
 @dataclass
@@ -40,12 +39,15 @@ class AppConfig:
     telegram: TelegramConfig
     discord: DiscordConfig
     media: MediaConfig
-    routes: List[Route]
-    route_map: Dict[int, List[int]] = field(default_factory=dict)
+    routes: list[Route]
+    route_map: dict[int, list[int]] = field(default_factory=dict, init=False)
+
+    def __post_init__(self) -> None:
+        self.route_map = _build_route_map(self.routes)
 
 
-def _build_route_map(routes: List[Route]) -> Dict[int, List[int]]:
-    route_map: Dict[int, List[int]] = {}
+def _build_route_map(routes: list[Route]) -> dict[int, list[int]]:
+    route_map: dict[int, list[int]] = {}
     for route in routes:
         for chat_id in route.from_chats:
             if chat_id not in route_map:
@@ -92,7 +94,6 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
             ),
         ),
         routes=routes,
-        route_map=_build_route_map(routes),
     )
 
 
@@ -124,6 +125,8 @@ def save_config(config: AppConfig, path: str = "data/config.yaml") -> None:
 
 
 def add_route(config: AppConfig, route: Route, path: str = "data/config.yaml") -> None:
+    if any(r.name == route.name for r in config.routes):
+        raise ValueError(f"Route '{route.name}' already exists")
     config.routes.append(route)
     config.route_map = _build_route_map(config.routes)
     save_config(config, path)

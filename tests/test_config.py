@@ -81,3 +81,10 @@ def test_remove_route_nonexistent(config_file):
     removed = remove_route(config, "ghost", config_file)
     assert removed is False
     assert len(config.routes) == 2
+
+
+def test_add_route_duplicate_name_raises(config_file):
+    config = load_config(config_file)
+    duplicate = Route(name="r1", from_chats=[-100999], to_channels=[111])
+    with pytest.raises(ValueError, match="already exists"):
+        add_route(config, duplicate, config_file)
