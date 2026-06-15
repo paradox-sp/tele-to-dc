@@ -102,15 +102,6 @@ When `commands_enabled: true`, server administrators can manage routes without r
 
 Route changes are saved immediately but require a bot restart to take effect on the Telegram listener.
 
-## Build and Push (GitHub Actions)
-
-A manual workflow is included to build and push the Docker image to GitHub Container Registry:
-
-1. Go to **Actions** → **Build and Push Docker Image** → **Run workflow**
-2. Enter an optional tag (default: `latest`)
-
-The image is built for both `linux/amd64` and `linux/arm64`.
-
 ## Requirements
 
 - Docker and Docker Compose
