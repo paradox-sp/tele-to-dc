@@ -8,3 +8,7 @@ __pycache__/
 *.pyc
 requirements-dev.txt
 pytest.ini
+config.example.yaml
+*.session
+*.session-journal
+.env*

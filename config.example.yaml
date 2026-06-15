@@ -1,21 +1,33 @@
 telegram:
+  # Get api_id and api_hash from https://my.telegram.org/apps
   api_id: 12345678
   api_hash: "your_api_hash_here"
+  # Name of the Telethon session file saved in data/ (no extension needed)
   session_name: "tg_session"
 
 discord:
+  # Discord bot token from https://discord.com/developers/applications
   token: "your_discord_bot_token"
+  # Set to false to disable /route slash commands entirely (pure forwarding mode)
   commands_enabled: true
 
 media:
+  # Files at or under this size are re-uploaded directly to Discord
+  # Files over this limit use Catbox (if enabled) or show a notice
   max_upload_size_mb: 25
   catbox:
+    # Upload large files to catbox.moe instead of showing a "too large" notice
     enabled: false
+    # Optional: your catbox.moe userhash for account uploads. Leave empty for anonymous.
     userhash: ""
 
 routes:
+  # Each route maps one or more Telegram sources to one or more Discord channels.
+  # Telegram chat IDs are negative numbers for groups/channels (e.g. -1001234567890).
+  # Get Telegram chat IDs by forwarding a message to @userinfobot or similar.
+  # Discord channel IDs: right-click a channel → Copy Channel ID (enable Developer Mode first).
   - name: "example-route"
     from:
-      - -1001234567890
+      - -1001234567890    # Telegram channel/group ID
     to:
-      - 987654321098765432
+      - 987654321098765432  # Discord channel ID
