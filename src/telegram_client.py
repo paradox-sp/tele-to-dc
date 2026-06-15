@@ -10,8 +10,9 @@ from message_processor import ForwardPayload, process_message
 logger = logging.getLogger(__name__)
 
 # Buffers for collecting album (grouped) messages before forwarding
-_album_buffer: dict[int, list] = {}
-_album_tasks: dict[int, asyncio.Task] = {}
+# Key is (chat_id, grouped_id) to avoid collisions across different chats.
+_album_buffer: dict[tuple[int, int], list] = {}
+_album_tasks: dict[tuple[int, int], asyncio.Task] = {}
 
 
 def create_telegram_client(
@@ -39,7 +40,7 @@ def create_telegram_client(
         route_name = _find_route_name(config, chat_id)
 
         if message.grouped_id:
-            await _buffer_album(message, route_name, chat_name, sender_name, channel_ids, config, on_payload, client)
+            await _buffer_album(message, chat_id, route_name, chat_name, sender_name, channel_ids, config, on_payload, client)
             return
 
         async def download(m):
@@ -47,7 +48,10 @@ def create_telegram_client(
 
         payload = await process_message(message, route_name, chat_name, sender_name, config.media, download_fn=download)
         for channel_id in channel_ids:
-            await on_payload(channel_id, payload)
+            try:
+                await on_payload(channel_id, payload)
+            except Exception as exc:
+                logger.error("Failed to send payload to channel %d: %s", channel_id, exc)
 
     return client
 
@@ -82,17 +86,20 @@ def _find_route_name(config: AppConfig, chat_id: int) -> str:
     return str(chat_id)
 
 
-async def _buffer_album(message, route_name, chat_name, sender_name, channel_ids, config, on_payload, client):
-    grouped_id = message.grouped_id
-    _album_buffer.setdefault(grouped_id, []).append(message)
+async def _buffer_album(message, chat_id, route_name, chat_name, sender_name, channel_ids, config, on_payload, client):
+    key = (chat_id, message.grouped_id)
+    _album_buffer.setdefault(key, []).append(message)
 
-    if grouped_id in _album_tasks:
-        _album_tasks[grouped_id].cancel()
+    if key in _album_tasks:
+        _album_tasks[key].cancel()
 
     async def flush():
         await asyncio.sleep(1.0)
-        messages = _album_buffer.pop(grouped_id, [])
-        _album_tasks.pop(grouped_id, None)
+        if _album_tasks.get(key) is not asyncio.current_task():
+            return  # superseded by a newer task
+
+        messages = _album_buffer.pop(key, [])
+        _album_tasks.pop(key, None)
 
         combined = ForwardPayload(
             route_name=route_name,
@@ -105,12 +112,18 @@ async def _buffer_album(message, route_name, chat_name, sender_name, channel_ids
             return await client.download_media(m, bytes)
 
         for msg in messages:
-            part = await process_message(msg, route_name, chat_name, sender_name, config.media, download_fn=download)
-            combined.attachments.extend(part.attachments)
-            combined.catbox_urls.extend(part.catbox_urls)
-            combined.notices.extend(part.notices)
+            try:
+                part = await process_message(msg, route_name, chat_name, sender_name, config.media, download_fn=download)
+                combined.attachments.extend(part.attachments)
+                combined.catbox_urls.extend(part.catbox_urls)
+                combined.notices.extend(part.notices)
+            except Exception as exc:
+                logger.error("Failed to process album message %d: %s", msg.id, exc)
 
         for channel_id in channel_ids:
-            await on_payload(channel_id, combined)
+            try:
+                await on_payload(channel_id, combined)
+            except Exception as exc:
+                logger.error("Failed to send payload to channel %d: %s", channel_id, exc)
 
-    _album_tasks[grouped_id] = asyncio.create_task(flush())
+    _album_tasks[key] = asyncio.create_task(flush())
