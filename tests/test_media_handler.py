@@ -1,6 +1,9 @@
 # tests/test_media_handler.py
-from unittest.mock import AsyncMock, patch
-from media_handler import handle_media
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import aiohttp
+
+from media_handler import handle_media, _upload_to_catbox
 from config import MediaConfig, CatboxConfig
 
 
@@ -56,3 +59,50 @@ async def test_file_exactly_at_limit_is_uploaded():
     data = b"x" * (1024 * 1024 * 25)  # exactly 25 MB
     result = await handle_media(data, "exact.mp4", make_config(max_mb=25))
     assert result.data == data
+
+
+async def test_upload_to_catbox_returns_url_on_success():
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.text = AsyncMock(return_value="https://files.catbox.moe/abc123.mp4\n")
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = MagicMock()
+    mock_session.post = MagicMock(return_value=mock_resp)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = await _upload_to_catbox(b"data", "test.mp4", "")
+
+    assert result == "https://files.catbox.moe/abc123.mp4"
+
+
+async def test_upload_to_catbox_returns_none_on_non_200():
+    mock_resp = AsyncMock()
+    mock_resp.status = 500
+    mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = MagicMock()
+    mock_session.post = MagicMock(return_value=mock_resp)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = await _upload_to_catbox(b"data", "test.mp4", "")
+
+    assert result is None
+
+
+async def test_upload_to_catbox_returns_none_on_client_error():
+    mock_session = MagicMock()
+    mock_session.post = MagicMock(side_effect=aiohttp.ClientError("connection refused"))
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("aiohttp.ClientSession", return_value=mock_session):
+        result = await _upload_to_catbox(b"data", "test.mp4", "")
+
+    assert result is None

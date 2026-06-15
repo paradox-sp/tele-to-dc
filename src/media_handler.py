@@ -1,3 +1,4 @@
+import asyncio
 import io
 from dataclasses import dataclass
 from typing import Optional
@@ -32,7 +33,7 @@ async def handle_media(file_bytes: bytes, filename: str, config: MediaConfig) ->
     return MediaResult(data=None, filename=filename, catbox_url=None, notice=notice)
 
 
-async def _upload_to_catbox(file_bytes: bytes, filename: str, userhash: str = "") -> Optional[str]:
+async def _upload_to_catbox(file_bytes: bytes, filename: str, userhash: str) -> Optional[str]:
     form = aiohttp.FormData()
     form.add_field("reqtype", "fileupload")
     form.add_field("userhash", userhash)
@@ -49,6 +50,6 @@ async def _upload_to_catbox(file_bytes: bytes, filename: str, userhash: str = ""
                     text = (await resp.text()).strip()
                     if text.startswith("https://"):
                         return text
-    except aiohttp.ClientError:
+    except (aiohttp.ClientError, asyncio.TimeoutError):
         pass
     return None
