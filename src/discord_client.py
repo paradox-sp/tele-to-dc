@@ -31,8 +31,14 @@ def create_discord_client(
     async def send_payload(channel_id: int, payload: ForwardPayload) -> None:
         channel = bot.get_channel(channel_id)
         if not channel:
-            logger.warning("Channel %d not found or not cached", channel_id)
-            return
+            try:
+                channel = await bot.fetch_channel(channel_id)
+            except discord.NotFound:
+                logger.error("Channel %d not found", channel_id)
+                return
+            except discord.Forbidden:
+                logger.error("No access to channel %d", channel_id)
+                return
 
         embed = discord.Embed(color=0x2CA5E0)
         embed.set_author(name=f"📢 {payload.route_name}")
@@ -55,6 +61,12 @@ def create_discord_client(
                 break
             embed.add_field(name="Notice", value=notice, inline=False)
 
+        if len(payload.attachments) > 10:
+            embed.add_field(
+                name="Notice",
+                value=f"⚠️ Album has {len(payload.attachments)} files — only first 10 forwarded (Discord limit).",
+                inline=False,
+            )
         files = [
             discord.File(fp=io.BytesIO(data), filename=fname)
             for data, fname in payload.attachments[:10]
@@ -103,7 +115,7 @@ def _register_commands(bot: commands.Bot, config: AppConfig) -> None:
             try:
                 route = Route(name=name, from_chats=[int(telegram_id)], to_channels=[int(discord_channel)])
                 add_route(config, route)
-                await interaction.response.send_message(f"Route **{name}** added.", ephemeral=True)
+                await interaction.response.send_message(f"Route **{name}** added. Restart the bot to apply changes to the Telegram listener.", ephemeral=True)
             except ValueError as exc:
                 await interaction.response.send_message(f"Error: {exc}", ephemeral=True)
 
@@ -112,7 +124,7 @@ def _register_commands(bot: commands.Bot, config: AppConfig) -> None:
                 await interaction.response.send_message("Provide a route name.", ephemeral=True)
                 return
             if remove_route(config, name):
-                await interaction.response.send_message(f"Route **{name}** removed.", ephemeral=True)
+                await interaction.response.send_message(f"Route **{name}** removed. Restart the bot to apply changes to the Telegram listener.", ephemeral=True)
             else:
                 await interaction.response.send_message(f"Route **{name}** not found.", ephemeral=True)
 

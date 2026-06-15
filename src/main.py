@@ -44,10 +44,16 @@ async def main() -> None:
 
     logger.info("Starting Discord bot...")
     async with discord_bot:
-        await asyncio.gather(
-            discord_bot.start(config.discord.token),
-            tg_client.run_until_disconnected(),
-        )
+        try:
+            await asyncio.gather(
+                discord_bot.start(config.discord.token),
+                tg_client.run_until_disconnected(),
+                return_exceptions=True,
+            )
+        finally:
+            if tg_client.is_connected():
+                await tg_client.disconnect()
+            logger.info("All clients disconnected.")
 
 
 if __name__ == "__main__":
