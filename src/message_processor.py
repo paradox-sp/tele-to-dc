@@ -44,10 +44,13 @@ async def process_message(
         payload.text = _format_poll(message.poll.poll)
         return payload
 
-    has_media = any([message.photo, message.video, message.audio, message.voice, message.document, message.sticker])
-    if has_media and download_fn:
-        filename = _get_filename(message)
-        file_bytes = await download_fn(message)
+    filename = _get_filename(message)
+    if filename and download_fn:
+        try:
+            file_bytes = await download_fn(message)
+        except Exception:
+            payload.notices.append(f"⚠️ Failed to download media: {filename}")
+            return payload
         if file_bytes:
             result = await handle_media(file_bytes, filename, media_config)
             if result.data:
@@ -65,7 +68,7 @@ def _format_poll(poll) -> str:
     return f"📊 **{poll.question}**\n{options}"
 
 
-def _get_filename(message) -> str:
+def _get_filename(message) -> Optional[str]:
     if message.sticker:
         return f"sticker_{message.id}.webp"
     if message.photo:
@@ -78,7 +81,7 @@ def _get_filename(message) -> str:
         return f"voice_{message.id}.ogg"
     if message.document:
         return _doc_filename(message, f"file_{message.id}")
-    return f"file_{message.id}"
+    return None
 
 
 def _doc_filename(message, default: str) -> str:

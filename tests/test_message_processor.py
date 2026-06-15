@@ -1,6 +1,6 @@
 # tests/test_message_processor.py
 from unittest.mock import MagicMock, AsyncMock, patch
-from message_processor import process_message, ForwardPayload
+from message_processor import process_message, ForwardPayload, _get_filename
 from config import MediaConfig, CatboxConfig
 
 
@@ -81,12 +81,17 @@ async def test_photo_under_limit_attached():
 async def test_photo_over_limit_no_catbox_gives_notice():
     msg = make_msg()
     msg.photo = MagicMock()
-    big = b"x" * (1024 * 1024 * 30)
+    big = b"x" * 100  # small bytes — handle_media is mocked
 
     async def dl(m):
         return big
 
-    payload = await process_message(msg, "r", "Chat", "user", make_config(max_mb=25), download_fn=dl)
+    from media_handler import MediaResult
+    mock_result = MediaResult(data=None, filename="photo_1.jpg", catbox_url=None, notice="⚠️ File too large to forward: photo_1.jpg (87.0 MB)")
+
+    with patch("message_processor.handle_media", new=AsyncMock(return_value=mock_result)):
+        payload = await process_message(msg, "r", "Chat", "user", make_config(max_mb=25), download_fn=dl)
+
     assert payload.attachments == []
     assert len(payload.notices) == 1
     assert "too large" in payload.notices[0]
@@ -116,3 +121,39 @@ async def test_forwarded_message_no_name_shows_generic():
     payload = await process_message(msg, "r", "Chat", "user", make_config())
     assert payload.forward_from != ""
     assert "↩️" in payload.forward_from
+
+
+def test_get_filename_photo():
+    msg = make_msg()
+    msg.photo = MagicMock()
+    assert _get_filename(msg) == "photo_1.jpg"
+
+
+def test_get_filename_sticker():
+    msg = make_msg()
+    msg.sticker = MagicMock()
+    assert _get_filename(msg) == "sticker_1.webp"
+
+
+def test_get_filename_voice():
+    msg = make_msg()
+    msg.voice = MagicMock()
+    assert _get_filename(msg) == "voice_1.ogg"
+
+
+def test_get_filename_no_media_returns_none():
+    msg = make_msg()
+    assert _get_filename(msg) is None
+
+
+async def test_download_failure_appends_notice():
+    msg = make_msg()
+    msg.photo = MagicMock()
+
+    async def failing_dl(m):
+        raise ConnectionError("network error")
+
+    payload = await process_message(msg, "r", "Chat", "user", make_config(), download_fn=failing_dl)
+    assert payload.attachments == []
+    assert len(payload.notices) == 1
+    assert "Failed to download" in payload.notices[0]
