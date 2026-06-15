@@ -1,0 +1,21 @@
+telegram:
+  api_id: 12345678
+  api_hash: "your_api_hash_here"
+  session_name: "tg_session"
+
+discord:
+  token: "your_discord_bot_token"
+  commands_enabled: true
+
+media:
+  max_upload_size_mb: 25
+  catbox:
+    enabled: false
+    userhash: ""
+
+routes:
+  - name: "example-route"
+    from:
+      - -1001234567890
+    to:
+      - 987654321098765432
