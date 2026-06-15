@@ -44,10 +44,15 @@ def create_discord_client(
         if payload.text:
             embed.description = payload.text[:4096]
 
+        MAX_FIELDS = 25
         for url in payload.catbox_urls:
+            if len(embed.fields) >= MAX_FIELDS:
+                break
             embed.add_field(name="File", value=url, inline=False)
 
         for notice in payload.notices:
+            if len(embed.fields) >= MAX_FIELDS:
+                break
             embed.add_field(name="Notice", value=notice, inline=False)
 
         files = [
@@ -59,6 +64,9 @@ def create_discord_client(
             await channel.send(embed=embed, files=files or discord.utils.MISSING)
         except discord.HTTPException as exc:
             logger.error("Failed to send to channel %d: %s", channel_id, exc)
+        finally:
+            for f in files:
+                f.fp.close()
 
     return bot, send_payload
 
