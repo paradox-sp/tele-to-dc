@@ -29,29 +29,32 @@ def create_telegram_client(
 
     @client.on(events.NewMessage(chats=watched))
     async def _handle(event: events.NewMessage.Event):
-        chat_id = event.chat_id
-        channel_ids = config.route_map.get(chat_id)
-        if not channel_ids:
-            return
+        try:
+            chat_id = event.chat_id
+            channel_ids = config.route_map.get(chat_id)
+            if not channel_ids:
+                return
 
-        message = event.message
-        chat_name = await _get_chat_name(event, chat_id)
-        sender_name = await _get_sender_name(event, chat_name)
-        route_name = _find_route_name(config, chat_id)
+            message = event.message
+            chat_name = await _get_chat_name(event, chat_id)
+            sender_name = await _get_sender_name(event, chat_name)
+            route_name = _find_route_name(config, chat_id)
 
-        if message.grouped_id:
-            await _buffer_album(message, chat_id, route_name, chat_name, sender_name, channel_ids, config, on_payload, client)
-            return
+            if message.grouped_id:
+                await _buffer_album(message, chat_id, route_name, chat_name, sender_name, channel_ids, config, on_payload, client)
+                return
 
-        async def download(m):
-            return await client.download_media(m, bytes)
+            async def download(m):
+                return await client.download_media(m, bytes)
 
-        payload = await process_message(message, route_name, chat_name, sender_name, config.media, download_fn=download)
-        for channel_id in channel_ids:
-            try:
-                await on_payload(channel_id, payload)
-            except Exception as exc:
-                logger.error("Failed to send payload to channel %d: %s", channel_id, exc)
+            payload = await process_message(message, route_name, chat_name, sender_name, config.media, download_fn=download)
+            for channel_id in channel_ids:
+                try:
+                    await on_payload(channel_id, payload)
+                except Exception as exc:
+                    logger.error("Failed to send payload to channel %d: %s", channel_id, exc)
+        except Exception as e:
+            logger.exception("Error in Telegram message handler: %s", e)
 
     return client
 
