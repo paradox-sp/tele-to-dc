@@ -11,6 +11,8 @@ class CatboxConfig:
 @dataclass
 class MediaConfig:
     max_upload_size_mb: int = 25
+    catbox_max_upload_size_mb: int = 200
+    max_file_size_mb: int = 200
     catbox: CatboxConfig = field(default_factory=CatboxConfig)
 
 
@@ -88,6 +90,8 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
         ),
         media=MediaConfig(
             max_upload_size_mb=int(media_data.get("max_upload_size_mb", 25)),
+            catbox_max_upload_size_mb=int(media_data.get("catbox_max_upload_size_mb", 200)),
+            max_file_size_mb=int(media_data.get("max_file_size_mb", 200)),
             catbox=CatboxConfig(
                 enabled=bool(catbox_data.get("enabled", False)),
                 userhash=str(catbox_data.get("userhash", "")),
@@ -110,6 +114,8 @@ def save_config(config: AppConfig, path: str = "data/config.yaml") -> None:
         },
         "media": {
             "max_upload_size_mb": config.media.max_upload_size_mb,
+            "catbox_max_upload_size_mb": config.media.catbox_max_upload_size_mb,
+            "max_file_size_mb": config.media.max_file_size_mb,
             "catbox": {
                 "enabled": config.media.catbox.enabled,
                 "userhash": config.media.catbox.userhash,

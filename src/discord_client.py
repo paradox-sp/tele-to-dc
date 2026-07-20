@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 from typing import Awaitable, Callable
@@ -14,15 +15,19 @@ logger = logging.getLogger(__name__)
 
 def create_discord_client(
     config: AppConfig,
-) -> tuple[commands.Bot, Callable[[int, ForwardPayload], Awaitable[None]]]:
+) -> tuple[commands.Bot, Callable[[int, ForwardPayload], Awaitable[None]], asyncio.AbstractEventLoop]:
     intents = discord.Intents.default()
     bot = commands.Bot(command_prefix="!", intents=intents)
 
+    _first_ready = True
+
     @bot.event
     async def on_ready():
-        if config.discord.commands_enabled:
+        nonlocal _first_ready
+        if config.discord.commands_enabled and _first_ready:
             await bot.tree.sync()
             logger.info("Slash commands synced")
+            _first_ready = False
         logger.info("Discord bot ready: %s", bot.user)
 
     if config.discord.commands_enabled:
@@ -41,25 +46,30 @@ def create_discord_client(
                 return
 
         embed = discord.Embed(color=0x2CA5E0)
-        embed.set_author(name=f"📢 {payload.route_name}")
-        embed.add_field(name=payload.chat_name, value=payload.sender_name or "​", inline=True)
+        embed.set_author(name=f"📢 {payload.route_name}"[:256])
+        embed.add_field(name=payload.chat_name[:256], value=(payload.sender_name or "\u200b")[:1024], inline=True)
 
         if payload.forward_from:
-            embed.add_field(name="​", value=payload.forward_from, inline=False)
+            embed.add_field(name="\u200b", value=payload.forward_from[:1024], inline=False)
 
         if payload.text:
             embed.description = payload.text[:4096]
 
         MAX_FIELDS = 25
+        urls_shown = 0
         for url in payload.catbox_urls:
             if len(embed.fields) >= MAX_FIELDS:
+                logger.warning("Embed field limit (%d) reached; %d catbox URL(s) not shown", MAX_FIELDS, len(payload.catbox_urls) - urls_shown)
                 break
-            embed.add_field(name="File", value=url, inline=False)
-
+            embed.add_field(name="File", value=url[:1024], inline=False)
+            urls_shown += 1
+        notices_shown = 0
         for notice in payload.notices:
             if len(embed.fields) >= MAX_FIELDS:
+                logger.warning("Embed field limit (%d) reached; %d notice(s) not shown", MAX_FIELDS, len(payload.notices) - notices_shown)
                 break
-            embed.add_field(name="Notice", value=notice, inline=False)
+            embed.add_field(name="Notice", value=notice[:1024], inline=False)
+            notices_shown += 1
 
         if len(payload.attachments) > 10:
             embed.add_field(
@@ -80,7 +90,8 @@ def create_discord_client(
             for f in files:
                 f.fp.close()
 
-    return bot, send_payload
+    discord_loop = asyncio.new_event_loop()
+    return bot, send_payload, discord_loop
 
 
 def _register_commands(bot: commands.Bot, config: AppConfig) -> None:

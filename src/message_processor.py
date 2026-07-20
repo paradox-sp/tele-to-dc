@@ -59,6 +59,8 @@ async def process_message(
                 payload.catbox_urls.append(result.catbox_url)
             elif result.notice:
                 payload.notices.append(result.notice)
+        else:
+            payload.notices.append(f"⚠️ Failed to download media: {filename}")
 
     return payload
 

@@ -97,18 +97,30 @@ async def _buffer_album(message, chat_id, route_name, chat_name, sender_name, ch
         _album_tasks[key].cancel()
 
     async def flush():
-        await asyncio.sleep(1.0)
-        if _album_tasks.get(key) is not asyncio.current_task():
-            return  # superseded by a newer task
+        try:
+            await asyncio.sleep(1.0)
+            if _album_tasks.get(key) is not asyncio.current_task():
+                return  # superseded by a newer task
+            messages = _album_buffer.pop(key, [])
+            _album_tasks.pop(key, None)
+        except asyncio.CancelledError:
+            # Ensure buffer/task entries are cleaned up even if cancelled.
+            _album_buffer.pop(key, None)
+            _album_tasks.pop(key, None)
+            raise
 
-        messages = _album_buffer.pop(key, [])
-        _album_tasks.pop(key, None)
+        def _fwd(m):
+            if m.fwd_from:
+                name = getattr(m.fwd_from, "from_name", None) or ""
+                return f"↩️ Forwarded from: {name}" if name else "↩️ Forwarded message"
+            return ""
 
         combined = ForwardPayload(
             route_name=route_name,
             chat_name=chat_name,
             sender_name=sender_name,
             text=next((m.text or m.caption or "" for m in messages if (m.text or m.caption)), ""),
+            forward_from=next((_fwd(m) for m in messages if _fwd(m)), ""),
         )
 
         async def download(m):

@@ -157,3 +157,16 @@ async def test_download_failure_appends_notice():
     assert payload.attachments == []
     assert len(payload.notices) == 1
     assert "Failed to download" in payload.notices[0]
+
+
+async def test_empty_download_adds_notice():
+    msg = make_msg()
+    msg.photo = MagicMock()
+
+    async def empty_dl(m):
+        return None
+
+    payload = await process_message(msg, "r", "Chat", "user", make_config(), download_fn=empty_dl)
+    assert payload.attachments == []
+    assert len(payload.notices) == 1
+    assert "Failed to download media" in payload.notices[0]

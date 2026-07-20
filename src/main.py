@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import sys
+import threading
 
 from config import load_config
 from discord_client import create_discord_client
@@ -36,29 +37,48 @@ async def run_bot() -> None:
 
     logger.info("Loaded %d route(s)", len(config.routes))
 
-    discord_bot, send_payload = create_discord_client(config)
-    tg_client = create_telegram_client(config, send_payload)
+    discord_bot, send_payload, discord_loop = create_discord_client(config)
+
+    # Start Discord on its own event loop in a separate daemon thread
+    # so its gateway heartbeat can never be starved by Telethon.
+    discord_thread = threading.Thread(
+        target=discord_loop.run_forever, name="discord-loop", daemon=True
+    )
+    discord_thread.start()
+    asyncio.run_coroutine_threadsafe(
+        discord_bot.start(config.discord.token), discord_loop
+    )
+
+    # Wrap send_payload so calls from Telethon's loop hop over to Discord's loop
+    async def send_payload_safe(channel_id: int, payload) -> None:
+        fut = asyncio.run_coroutine_threadsafe(
+            send_payload(channel_id, payload), discord_loop
+        )
+        return await asyncio.wrap_future(fut)
+
+    tg_client = create_telegram_client(config, send_payload_safe)
 
     logger.info("Connecting to Telegram (first run will prompt for phone number)...")
     await tg_client.start()
     logger.info("Telegram connected.")
 
     logger.info("Starting Discord bot...")
-    async with discord_bot:
-        try:
-            await asyncio.gather(
-                discord_bot.start(config.discord.token),
-                tg_client.run_until_disconnected(),
-            )
-        except (asyncio.CancelledError, KeyboardInterrupt):
-            raise
-        except Exception as exc:
-            logger.exception("Bot crashed due to: %s", exc)
-            raise  # propagate to outer loop for restart
-        finally:
-            if tg_client.is_connected():
-                await tg_client.disconnect()
-            logger.info("All clients disconnected.")
+    try:
+        await tg_client.run_until_disconnected()
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
+    except Exception as exc:
+        logger.exception("Bot crashed due to: %s", exc)
+        raise  # propagate to outer loop for restart
+    finally:
+        if tg_client.is_connected():
+            await tg_client.disconnect()
+        async def _close_and_stop():
+            await discord_bot.close()
+            discord_loop.stop()
+        asyncio.run_coroutine_threadsafe(_close_and_stop(), discord_loop)
+        discord_thread.join(timeout=10)
+        logger.info("All clients disconnected.")
 
 
 async def main() -> None:

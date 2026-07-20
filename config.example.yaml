@@ -15,6 +15,12 @@ media:
   # Files at or under this size are re-uploaded directly to Discord
   # Files over this limit use Catbox (if enabled) or show a notice
   max_upload_size_mb: 25
+  # Files larger than Discord's limit go to catbox.moe (if enabled).
+  # catbox.moe accepts uploads up to 200 MB.
+  catbox_max_upload_size_mb: 200
+  # Absolute ceiling: files above this are skipped entirely (never uploaded)
+  # to avoid running out of memory. Should match or exceed catbox_max_upload_size_mb.
+  max_file_size_mb: 200
   catbox:
     # Upload large files to catbox.moe instead of showing a "too large" notice
     enabled: false
