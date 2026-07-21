@@ -1,11 +1,14 @@
 import asyncio
 import io
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 import aiohttp
 
 from config import MediaConfig
+
+logger = logging.getLogger(__name__)
 
 CATBOX_URL = "https://catbox.moe/user/api.php"
 
@@ -79,11 +82,21 @@ async def _upload_to_catbox(file_bytes: bytes, filename: str, userhash: str) -> 
     try:
         async with _UPLOAD_SEMAPHORE:
             session = _get_session()
-            async with session.post(CATBOX_URL, data=form) as resp:
+            async with session.post(CATBOX_URL, data=form, timeout=aiohttp.ClientTimeout(total=300)) as resp:
                 if resp.status == 200:
                     text = (await resp.text()).strip()
                     if text.startswith("https://"):
                         return text
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        pass
+                    logger.warning("catbox returned 200 but unexpected body: %.200s", text)
+                else:
+                    logger.warning(
+                        "catbox returned HTTP %d for %s: %.200s",
+                        resp.status, filename, await resp.text()
+                    )
+    except asyncio.TimeoutError:
+        logger.warning("catbox upload timed out for %s", filename)
+    except aiohttp.ClientError as exc:
+        logger.warning("catbox upload failed for %s: %s", filename, exc)
+    except Exception:
+        logger.exception("catbox upload unexpected error for %s", filename)
     return None
