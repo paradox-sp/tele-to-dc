@@ -25,7 +25,17 @@ media:
     # Upload large files to catbox.moe instead of showing a "too large" notice
     enabled: false
     # Optional: your catbox.moe userhash for account uploads. Leave empty for anonymous.
+    # NOTE: since Apr 2026 catbox restricts ANONYMOUS uploads from datacenter/server
+    # IPs (where Docker bots run). If uploads fail from your server, create a free
+    # catbox account and paste its userhash here — account uploads are not restricted.
     userhash: ""
+
+  # Disk mode (optional, env vars — NOT set in this file):
+  #   SAVE_MEDIA_TO_DISK=true   write Telegram downloads to disk instead of RAM,
+  #                             then upload from disk (lower memory usage)
+  #   MEDIA_CACHE_DIR=/path     where downloaded files go (default: data/media_cache)
+  # When SAVE_MEDIA_TO_DISK is off (default), everything stays in memory and the
+  # per-route `store` option below is ignored.
 
 routes:
   # Each route maps one or more Telegram sources to one or more Discord channels.
@@ -37,3 +47,6 @@ routes:
       - -1001234567890    # Telegram channel/group ID
     to:
       - 987654321098765432  # Discord channel ID
+    # store: true  # only meaningful with SAVE_MEDIA_TO_DISK=true:
+                   # send AND keep the downloaded file in the cache dir.
+                   # unset/false = send, then delete the temp file.

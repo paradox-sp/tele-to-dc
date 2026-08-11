@@ -1,5 +1,17 @@
 from dataclasses import dataclass, field
+import os
 import yaml
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_str(name: str, default: str) -> str:
+    return os.environ.get(name, default) or default
 
 
 @dataclass
@@ -14,6 +26,10 @@ class MediaConfig:
     catbox_max_upload_size_mb: int = 200
     max_file_size_mb: int = 200
     catbox: CatboxConfig = field(default_factory=CatboxConfig)
+    # Disk mode: when save_to_disk is True, downloads are written to cache_dir
+    # and uploaded from disk instead of being held in RAM.
+    save_to_disk: bool = False
+    cache_dir: str = "data/media_cache"
 
 
 @dataclass
@@ -34,6 +50,9 @@ class Route:
     name: str
     from_chats: list[int]
     to_channels: list[int]
+    # When True (and media.save_to_disk is enabled), keep the downloaded file
+    # in the cache dir after forwarding instead of deleting it.
+    store: bool = False
 
 
 @dataclass
@@ -74,6 +93,7 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
             name=r["name"],
             from_chats=[int(c) for c in r["from"]],
             to_channels=[int(c) for c in r["to"]],
+            store=bool(r.get("store", False)),
         )
         for r in data.get("routes", [])
     ]
@@ -96,6 +116,8 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
                 enabled=bool(catbox_data.get("enabled", False)),
                 userhash=str(catbox_data.get("userhash", "")),
             ),
+            save_to_disk=_env_bool("SAVE_MEDIA_TO_DISK"),
+            cache_dir=_env_str("MEDIA_CACHE_DIR", "data/media_cache"),
         ),
         routes=routes,
     )
@@ -122,12 +144,16 @@ def save_config(config: AppConfig, path: str = "data/config.yaml") -> None:
             },
         },
         "routes": [
-            {"name": r.name, "from": r.from_chats, "to": r.to_channels}
+            {"name": r.name, "from": r.from_chats, "to": r.to_channels, "store": r.store}
             for r in config.routes
         ],
     }
-    with open(path, "w") as f:
+    # Atomic write: write to a temp file then replace, so a crash mid-write
+    # can never corrupt the only config file.
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w") as f:
         yaml.dump(data, f, default_flow_style=False, allow_unicode=True)
+    os.replace(tmp_path, path)
 
 
 def add_route(config: AppConfig, route: Route, path: str = "data/config.yaml") -> None:

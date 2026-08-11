@@ -16,6 +16,7 @@ def make_msg(text="", caption=None):
     msg.poll = None
     msg.photo = None
     msg.video = None
+    msg.video_note = None
     msg.audio = None
     msg.voice = None
     msg.document = None
@@ -135,6 +136,18 @@ def test_get_filename_sticker():
     assert _get_filename(msg) == "sticker_1.webp"
 
 
+def test_get_filename_video():
+    msg = make_msg()
+    msg.video = MagicMock()
+    assert _get_filename(msg) == "video_1.mp4"
+
+
+def test_get_filename_video_note():
+    msg = make_msg()
+    msg.video_note = MagicMock()
+    assert _get_filename(msg) == "video_note_1.mp4"
+
+
 def test_get_filename_voice():
     msg = make_msg()
     msg.voice = MagicMock()
@@ -170,3 +183,91 @@ async def test_empty_download_adds_notice():
     assert payload.attachments == []
     assert len(payload.notices) == 1
     assert "Failed to download media" in payload.notices[0]
+
+
+async def test_video_note_processed_as_media():
+    msg = make_msg()
+    msg.video_note = MagicMock()
+    small = b"x" * (1024 * 1024 * 5)
+
+    async def dl(m):
+        return small
+
+    payload = await process_message(msg, "r", "Chat", "user", make_config(), download_fn=dl)
+    assert len(payload.attachments) == 1
+    assert payload.attachments[0][0] == small
+    assert payload.notices == []
+
+
+async def test_oversized_entity_skipped_before_download():
+    # H3: entity size is known before download — the hard cap must gate BEFORE
+    # download_media is called, so a huge file never enters RAM.
+    msg = make_msg()
+    msg.document = MagicMock()
+    msg.document.size = 2 * 1024 * 1024 * 1024  # 2 GB
+    msg.document.attributes = []
+
+    called = False
+
+    async def dl(m):
+        nonlocal called
+        called = True
+        return b"x" * 100
+
+    config = make_config(max_mb=25)
+    config.max_file_size_mb = 200
+
+    payload = await process_message(msg, "r", "Chat", "user", config, download_fn=dl)
+
+    assert called is False  # download never attempted
+    assert payload.attachments == []
+    assert len(payload.notices) == 1
+    assert "memory exhaustion" in payload.notices[0]
+
+
+async def test_entity_within_cap_still_downloads():
+    msg = make_msg()
+    msg.document = MagicMock()
+    msg.document.size = 50 * 1024 * 1024  # 50 MB
+    msg.document.attributes = []
+
+    async def dl(m):
+        return b"x" * 100
+
+    config = make_config(max_mb=25)
+    config.max_file_size_mb = 200
+
+    payload = await process_message(msg, "r", "Chat", "user", config, download_fn=dl)
+    assert len(payload.attachments) == 1
+
+
+async def test_path_based_download_attached_as_path(tmp_path):
+    # Disk mode: download_fn returns a file path instead of bytes.
+    msg = make_msg()
+    msg.photo = MagicMock()
+    media_path = tmp_path / "photo_1.jpg"
+    media_path.write_bytes(b"x" * (1024 * 1024 * 5))  # 5 MB, under the limit
+
+    async def dl(m):
+        return str(media_path)
+
+    payload = await process_message(msg, "r", "Chat", "user", make_config(), download_fn=dl)
+    assert len(payload.attachments) == 1
+    assert payload.attachments[0][0] == str(media_path)
+
+
+async def test_handle_media_failure_adds_notice():
+    # MINOR-10: an unexpected handle_media error (e.g. file vanished between
+    # download and upload) must degrade to a notice, not drop the whole payload.
+    msg = make_msg()
+    msg.photo = MagicMock()
+
+    async def dl(m):
+        return b"data"
+
+    with patch("message_processor.handle_media", side_effect=OSError("file vanished")):
+        payload = await process_message(msg, "r", "Chat", "user", make_config(), download_fn=dl)
+
+    assert payload.attachments == []
+    assert len(payload.notices) == 1
+    assert "Failed to process media" in payload.notices[0]

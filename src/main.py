@@ -17,6 +17,39 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "data/config.yaml")
 
 
+async def _wait_for_discord_start(start_future, discord_bot, timeout: float = 30.0) -> None:
+    """Wait for the Discord bot to log in, surfacing definite failures.
+
+    start() only completes early on failure, so a done future means the bot
+    failed to start — log the exception and re-raise it so the supervisor
+    restarts the process. Slowness is not a failure: after the grace period
+    we log a warning and continue.
+    """
+    waited = 0.0
+    while waited < timeout:
+        if start_future.done():
+            exc = start_future.exception()
+            if exc is not None:
+                logger.error("Discord bot failed to start: %s", exc)
+                raise exc
+            return
+        if discord_bot.is_ready():
+            return
+        await asyncio.sleep(1)
+        waited += 1
+    # A failure that completed just after the grace window must still be
+    # surfaced, not left sitting unread in the concurrent.futures.Future.
+    if start_future.done():
+        exc = start_future.exception()
+        if exc is not None:
+            logger.error("Discord bot failed to start: %s", exc)
+            raise exc
+    logger.warning(
+        "Discord bot not ready after %.0fs — continuing (may be slow to connect)",
+        timeout,
+    )
+
+
 async def run_bot() -> None:
     """Run a single instance of the bot, reconnecting on failure."""
     logger.info("Loading config from %s", CONFIG_PATH)
@@ -45,25 +78,30 @@ async def run_bot() -> None:
         target=discord_loop.run_forever, name="discord-loop", daemon=True
     )
     discord_thread.start()
-    asyncio.run_coroutine_threadsafe(
+    start_future = asyncio.run_coroutine_threadsafe(
         discord_bot.start(config.discord.token), discord_loop
     )
 
-    # Wrap send_payload so calls from Telethon's loop hop over to Discord's loop
-    async def send_payload_safe(channel_id: int, payload) -> None:
-        fut = asyncio.run_coroutine_threadsafe(
-            send_payload(channel_id, payload), discord_loop
-        )
-        return await asyncio.wrap_future(fut)
-
-    tg_client = create_telegram_client(config, send_payload_safe)
-
-    logger.info("Connecting to Telegram (first run will prompt for phone number)...")
-    await tg_client.start()
-    logger.info("Telegram connected.")
-
-    logger.info("Starting Discord bot...")
+    tg_client = None
     try:
+        # H2: surface Discord startup failures (e.g. invalid token) instead of
+        # silently running with a dead bot. start() only completes early on failure.
+        await _wait_for_discord_start(start_future, discord_bot)
+
+        # Wrap send_payload so calls from Telethon's loop hop over to Discord's loop
+        async def send_payload_safe(channel_id: int, payload) -> None:
+            fut = asyncio.run_coroutine_threadsafe(
+                send_payload(channel_id, payload), discord_loop
+            )
+            return await asyncio.wrap_future(fut)
+
+        tg_client = create_telegram_client(config, send_payload_safe)
+
+        logger.info("Connecting to Telegram (first run will prompt for phone number)...")
+        await tg_client.start()
+        logger.info("Telegram connected.")
+
+        logger.info("Starting Discord bot...")
         await tg_client.run_until_disconnected()
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
@@ -71,7 +109,10 @@ async def run_bot() -> None:
         logger.exception("Bot crashed due to: %s", exc)
         raise  # propagate to outer loop for restart
     finally:
-        if tg_client.is_connected():
+        # Cleanup runs even when startup failed (bad Discord token, Telegram
+        # auth error) so the discord-loop thread never leaks across supervisor
+        # restarts.
+        if tg_client is not None and tg_client.is_connected():
             await tg_client.disconnect()
         async def _close_and_stop():
             await discord_bot.close()

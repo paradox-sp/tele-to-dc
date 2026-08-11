@@ -4,7 +4,7 @@ A lightweight, self-hosted bot that automatically forwards messages from Telegra
 
 ## Features
 
-- Forwards text, photos, videos, documents, audio, voice messages, stickers, polls, and albums
+- Forwards text, photos, videos, round videos (video notes), documents, audio, voice messages, stickers, polls, and albums
 - Flexible many-to-many routing (many Telegram sources → many Discord channels)
 - Smart media handling: re-uploads files under the size limit, uploads large files to [catbox.moe](https://catbox.moe) (optional), or shows a "too large" notice
 - Forwarded message attribution shown in embeds
@@ -78,6 +78,8 @@ discord:
 
 media:
   max_upload_size_mb: 25          # files under this are re-uploaded to Discord
+  catbox_max_upload_size_mb: 200  # catbox.moe accepts uploads up to 200 MB
+  max_file_size_mb: 200           # absolute ceiling; larger files are skipped (memory safety)
   catbox:
     enabled: false                 # upload large files to catbox.moe instead of showing a notice
     userhash: ""                   # optional catbox.moe account hash (empty = anonymous)
@@ -88,7 +90,19 @@ routes:
       - -1001234567890            # one or more Telegram chat IDs
     to:
       - 987654321098765432        # one or more Discord channel IDs
+    # store: true                 # only with disk mode on: send AND keep the file in the cache dir
 ```
+
+### Disk mode (optional)
+
+By default media is downloaded into RAM and uploaded from memory. To save memory on low-RAM hosts (e.g. Raspberry Pi), set these environment variables:
+
+| Env var | Default | Description |
+|---|---|---|
+| `SAVE_MEDIA_TO_DISK` | off | Download Telegram media to disk instead of RAM, then upload from the file |
+| `MEDIA_CACHE_DIR` | `data/media_cache` | Where downloaded files are written |
+
+With disk mode on, temp files are deleted after forwarding unless the route sets `store: true` (send **and** keep). With disk mode off, everything stays in memory and `store` is ignored. Note: catbox restricts anonymous uploads from datacenter/server IPs (since Apr 2026) — if uploads fail from your server, create a free catbox account and set its `userhash`.
 
 ## Slash Commands
 

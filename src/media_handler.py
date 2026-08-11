@@ -1,8 +1,9 @@
 import asyncio
 import io
 import logging
+import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 import aiohttp
 
@@ -12,28 +13,41 @@ logger = logging.getLogger(__name__)
 
 CATBOX_URL = "https://catbox.moe/user/api.php"
 
+# catbox silently closes connections from default library User-Agents
+# (e.g. "Python/3.x aiohttp/3.x"), so send a descriptive app UA.
+USER_AGENT = "tele-to-dc/1.0 (+https://github.com/paradox-sp/tele-to-dc)"
+
 # Limit concurrent catbox uploads to avoid holding many 200MB files in RAM at once.
 _UPLOAD_SEMAPHORE = asyncio.Semaphore(3)
 _session: "aiohttp.ClientSession | None" = None
+
+# Media can be in-memory bytes or a path to a file on disk (disk mode).
+MediaSource = Union[bytes, str]
 
 
 def _get_session() -> "aiohttp.ClientSession":
     global _session
     if _session is None or _session.closed:
-        _session = aiohttp.ClientSession()
+        _session = aiohttp.ClientSession(headers={"User-Agent": USER_AGENT})
     return _session
+
+
+def _source_size(source: MediaSource) -> int:
+    if isinstance(source, str):
+        return os.path.getsize(source)
+    return len(source)
 
 
 @dataclass
 class MediaResult:
-    data: Optional[bytes]
+    data: Optional[MediaSource]
     filename: str
     catbox_url: Optional[str]
     notice: Optional[str]
 
 
-async def handle_media(file_bytes: bytes, filename: str, config: MediaConfig) -> MediaResult:
-    size_mb = len(file_bytes) / (1024 * 1024)
+async def handle_media(source: MediaSource, filename: str, config: MediaConfig) -> MediaResult:
+    size_mb = _source_size(source) / (1024 * 1024)
 
     # Absolute hard cap: file too large to even attempt upload (memory safety)
     if size_mb > config.max_file_size_mb:
@@ -45,7 +59,7 @@ async def handle_media(file_bytes: bytes, filename: str, config: MediaConfig) ->
 
     # Small enough to re-upload directly to Discord
     if size_mb <= config.max_upload_size_mb:
-        return MediaResult(data=file_bytes, filename=filename, catbox_url=None, notice=None)
+        return MediaResult(data=source, filename=filename, catbox_url=None, notice=None)
 
     # Too big for Discord — try catbox if enabled
     if config.catbox.enabled:
@@ -55,7 +69,7 @@ async def handle_media(file_bytes: bytes, filename: str, config: MediaConfig) ->
                 f"{filename} ({size_mb:.1f} MB)"
             )
             return MediaResult(data=None, filename=filename, catbox_url=None, notice=notice)
-        url = await _upload_to_catbox(file_bytes, filename, config.catbox.userhash)
+        url = await _upload_to_catbox(source, filename, config.catbox.userhash)
         if url:
             return MediaResult(data=None, filename=filename, catbox_url=url, notice=None)
         notice = f"⚠️ Failed to upload to catbox: {filename} ({size_mb:.1f} MB)"
@@ -69,16 +83,28 @@ async def handle_media(file_bytes: bytes, filename: str, config: MediaConfig) ->
     return MediaResult(data=None, filename=filename, catbox_url=None, notice=notice)
 
 
-async def _upload_to_catbox(file_bytes: bytes, filename: str, userhash: str) -> Optional[str]:
+async def _upload_to_catbox(source: MediaSource, filename: str, userhash: str) -> Optional[str]:
     form = aiohttp.FormData()
     form.add_field("reqtype", "fileupload")
     form.add_field("userhash", userhash)
-    form.add_field(
-        "fileToUpload",
-        io.BytesIO(file_bytes),
-        filename=filename,
-        content_type="application/octet-stream",
-    )
+    file_obj = None
+    if isinstance(source, str):
+        # Stream from disk instead of loading the whole file into RAM.
+        # aiohttp does not close user-provided file objects — we own the handle.
+        file_obj = open(source, "rb")
+        form.add_field(
+            "fileToUpload",
+            file_obj,
+            filename=filename,
+            content_type="application/octet-stream",
+        )
+    else:
+        form.add_field(
+            "fileToUpload",
+            io.BytesIO(source),
+            filename=filename,
+            content_type="application/octet-stream",
+        )
     try:
         async with _UPLOAD_SEMAPHORE:
             session = _get_session()
@@ -99,4 +125,7 @@ async def _upload_to_catbox(file_bytes: bytes, filename: str, userhash: str) -> 
         logger.warning("catbox upload failed for %s: %s", filename, exc)
     except Exception:
         logger.exception("catbox upload unexpected error for %s", filename)
+    finally:
+        if file_obj is not None:
+            file_obj.close()
     return None

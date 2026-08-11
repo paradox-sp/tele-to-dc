@@ -12,6 +12,11 @@ from message_processor import ForwardPayload
 
 logger = logging.getLogger(__name__)
 
+# M1: channels resolved via REST fetch_channel, keyed by channel ID, so a
+# channel that misses bot.get_channel's internal cache doesn't trigger a
+# REST round-trip on every message.
+_channel_cache: dict[int, object] = {}
+
 
 def create_discord_client(
     config: AppConfig,
@@ -24,6 +29,9 @@ def create_discord_client(
     @bot.event
     async def on_ready():
         nonlocal _first_ready
+        # M1: a supervisor restart reuses this module — drop channels resolved
+        # by the previous bot instance (their objects are bound to a dead loop).
+        _channel_cache.clear()
         if config.discord.commands_enabled and _first_ready:
             await bot.tree.sync()
             logger.info("Slash commands synced")
@@ -36,14 +44,18 @@ def create_discord_client(
     async def send_payload(channel_id: int, payload: ForwardPayload) -> None:
         channel = bot.get_channel(channel_id)
         if not channel:
+            channel = _channel_cache.get(channel_id)
+        if not channel:
             try:
                 channel = await bot.fetch_channel(channel_id)
             except discord.NotFound:
+                _channel_cache.pop(channel_id, None)
                 logger.error("Channel %d not found", channel_id)
                 return
             except discord.Forbidden:
                 logger.error("No access to channel %d", channel_id)
                 return
+            _channel_cache[channel_id] = channel
 
         embed = discord.Embed(color=0x2CA5E0)
         embed.set_author(name=f"📢 {payload.route_name}"[:256])
@@ -78,13 +90,22 @@ def create_discord_client(
                 inline=False,
             )
         files = [
-            discord.File(fp=io.BytesIO(data), filename=fname)
+            # Disk mode: media is a file path — let discord.py open it itself
+            # (no BytesIO copy). In-memory mode: wrap the bytes in BytesIO.
+            discord.File(fp=data, filename=fname)
+            if isinstance(data, str)
+            else discord.File(fp=io.BytesIO(data), filename=fname)
             for data, fname in payload.attachments[:10]
         ]
 
         try:
             await channel.send(embed=embed, files=files or discord.utils.MISSING)
         except discord.HTTPException as exc:
+            # A cached channel that was deleted must be dropped so the next
+            # message re-fetches instead of failing forever against the stale
+            # entry (NotFound is a subclass of HTTPException).
+            if isinstance(exc, discord.NotFound):
+                _channel_cache.pop(channel_id, None)
             logger.error("Failed to send to channel %d: %s", channel_id, exc)
         finally:
             for f in files:
@@ -99,8 +120,9 @@ def _register_commands(bot: commands.Bot, config: AppConfig) -> None:
     @app_commands.describe(
         action="list · add · remove",
         name="Route name",
-        telegram_id="Telegram chat ID (negative number for groups/channels)",
+        telegram_id="Telegram chat ID — enter the absolute value; bot negates it for groups/channels unless user_chat is set",
         discord_channel="Discord channel ID",
+        user_chat="Set true for user chats (positive ID)",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def route_cmd(
@@ -109,6 +131,7 @@ def _register_commands(bot: commands.Bot, config: AppConfig) -> None:
         name: str = "",
         telegram_id: str = "",
         discord_channel: str = "",
+        user_chat: bool = False,
     ):
         if action == "list":
             if not config.routes:
@@ -124,7 +147,12 @@ def _register_commands(bot: commands.Bot, config: AppConfig) -> None:
                 )
                 return
             try:
-                route = Route(name=name, from_chats=[int(telegram_id)], to_channels=[int(discord_channel)])
+                # Discord rejects option values starting with '-', so users
+                # enter the absolute value and we negate it here for
+                # groups/channels (negative Telegram chat IDs). User chats keep
+                # their positive ID when user_chat is set.
+                chat_id = int(telegram_id) if user_chat else -int(telegram_id)
+                route = Route(name=name, from_chats=[chat_id], to_channels=[int(discord_channel)])
                 add_route(config, route)
                 await interaction.response.send_message(f"Route **{name}** added. Restart the bot to apply changes to the Telegram listener.", ephemeral=True)
             except ValueError as exc:

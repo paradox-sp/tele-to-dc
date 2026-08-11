@@ -1,4 +1,6 @@
 # tests/test_config.py
+import os
+
 import pytest
 import yaml
 from config import load_config, save_config, add_route, remove_route, Route
@@ -88,3 +90,59 @@ def test_add_route_duplicate_name_raises(config_file):
     duplicate = Route(name="r1", from_chats=[-100999], to_channels=[111])
     with pytest.raises(ValueError, match="already exists"):
         add_route(config, duplicate, config_file)
+
+
+def test_route_store_defaults_false(config_file):
+    config = load_config(config_file)
+    assert all(r.store is False for r in config.routes)
+
+
+def test_load_route_store_true(tmp_path):
+    data = {
+        "telegram": {"api_id": 123, "api_hash": "abc"},
+        "discord": {"token": "tok"},
+        "routes": [
+            {"name": "r1", "from": [-100111], "to": [999], "store": True},
+            {"name": "r2", "from": [-100222], "to": [888]},
+        ],
+    }
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.dump(data))
+    config = load_config(str(path))
+    assert config.routes[0].store is True
+    assert config.routes[1].store is False
+
+
+def test_save_config_round_trips_store(config_file):
+    config = load_config(config_file)
+    config.routes[0].store = True
+    save_config(config, config_file)
+    reloaded = load_config(config_file)
+    assert reloaded.routes[0].store is True
+    assert reloaded.routes[1].store is False
+
+
+def test_save_config_leaves_no_tmp_file(config_file):
+    config = load_config(config_file)
+    save_config(config, config_file)
+    assert not os.path.exists(config_file + ".tmp")
+
+
+def test_media_save_to_disk_defaults_off(config_file):
+    config = load_config(config_file)
+    assert config.media.save_to_disk is False
+    assert config.media.cache_dir == "data/media_cache"
+
+
+def test_media_save_to_disk_from_env(config_file, monkeypatch):
+    monkeypatch.setenv("SAVE_MEDIA_TO_DISK", "true")
+    monkeypatch.setenv("MEDIA_CACHE_DIR", "/tmp/media_cache")
+    config = load_config(config_file)
+    assert config.media.save_to_disk is True
+    assert config.media.cache_dir == "/tmp/media_cache"
+
+
+def test_media_save_to_disk_env_falsey(config_file, monkeypatch):
+    monkeypatch.setenv("SAVE_MEDIA_TO_DISK", "0")
+    config = load_config(config_file)
+    assert config.media.save_to_disk is False

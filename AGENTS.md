@@ -15,10 +15,13 @@ A single-process async bot that forwards Telegram messages to Discord. Entrypoin
 ## Non-obvious facts
 - `pytest.ini` sets `pythonpath = src`, so tests import modules as top-level (`from config import ...`), not `src.config`. Don't add `src.` prefixes in imports.
 - `CONFIG_PATH` env var overrides config location (Docker sets it to `/app/data/config.yaml`). Default is `data/config.yaml`.
+- **Disk mode** (env vars, read in `config.py`): `SAVE_MEDIA_TO_DISK=true` makes `telegram_client` download media straight to disk (`MEDIA_CACHE_DIR`, default `data/media_cache`) instead of RAM; `media_handler`/`discord_client` then upload from the file path (`discord.File(fp=path)`, catbox streams from disk). Temp files are deleted after forwarding unless the route has `store: true` (cleanup in `telegram_client._cleanup_media`). Off by default — everything stays in memory and route `store` is ignored.
 - `data/` is gitignored and holds secrets + the Telethon session file. Never commit it.
 - Telegram auth uses a **user account** via Telethon, not a bot account. The session is persisted in `data/`.
-- Route changes via `/route` slash commands save to config immediately but only take effect for the Telegram listener after a **restart** (the Discord side updates live).
-- Media: files ≤ `media.max_upload_size_mb` (default 25) re-upload to Discord; larger files go to catbox.moe if `media.catbox.enabled`, else a "too large" notice.
+- **Two event loops**: Discord runs on its own loop in a separate daemon thread (`discord-loop` in `main.py`) so its gateway heartbeat is never starved by Telethon. Cross-loop calls must hop via `asyncio.run_coroutine_threadsafe` (see `send_payload_safe`) — don't call Discord coroutines directly from Telethon's loop.
+- Route changes via `/route` slash commands save to config immediately but only take effect for the Telegram listener after a **restart** (the Discord side updates live). This is by design, not a bug: the watched-chats list is captured at client creation, and `config.route_map` is a derived dict built in `config.py`'s `__post_init__`.
+- Media size logic is three-tier: ≤ `media.max_upload_size_mb` (default 25) re-uploads to Discord; larger files go to catbox.moe if `media.catbox.enabled` (up to `catbox_max_upload_size_mb`, default 200); files above `max_file_size_mb` (default 200) are skipped entirely with a notice for memory safety. The hard cap is enforced **before** download via entity `size` attrs (`message_processor._get_media_size`).
+- Telegram albums (grouped messages) are buffered ~1s in `telegram_client.py` and flushed as one combined payload; Discord embeds cap attachments at 10 per message, so album processing caps media at 10 (`MAX_ALBUM_ATTACHMENTS`) and processes messages concurrently (`asyncio.gather`). Album flush tasks use ownership-checked cleanup (`_cancel_cleanup`) so a cancelled task never destroys a successor's buffer.
 - Telegram chat IDs are negative for groups/channels (e.g. `-1001234567890`).
 
 ## Layout
