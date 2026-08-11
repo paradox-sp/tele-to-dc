@@ -89,6 +89,41 @@ async def test_clear_album_state_empties_buffers():
     assert _album_tasks == {}
 
 
+async def test_disconnect_watcher_clears_album_state():
+    # L7: stale album state must not survive a disconnect/restart. Telethon
+    # has no events.Disconnect — the watcher must await client.disconnected.
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from telegram_client import create_telegram_client
+
+    _album_buffer[(1, 2)] = [MagicMock()]
+    _album_tasks[(1, 2)] = MagicMock()
+
+    config = SimpleNamespace(
+        route_map={-1001: [123]},
+        routes=[SimpleNamespace(name="r", from_chats=[-1001], store=False)],
+        telegram=SimpleNamespace(session_name="s", api_id=1, api_hash="h"),
+    )
+
+    # Patch the class telegram_client actually uses (test_main.py installs a
+    # different telethon fake into sys.modules, so _telethon.TelegramClient
+    # is not the same object create_telegram_client constructs).
+    with patch("telegram_client.TelegramClient") as mock_tg:
+        client = mock_tg.return_value
+        client.disconnected = asyncio.Future()
+
+        create_telegram_client(config, AsyncMock())
+
+        # Let the watcher task reach its await, then resolve the disconnect.
+        await asyncio.sleep(0)
+        client.disconnected.set_result(None)
+        await asyncio.sleep(0)
+
+    assert _album_buffer == {}
+    assert _album_tasks == {}
+
+
 async def test_cancel_cleanup_removes_own_entry():
     key = (1, 2)
     _album_buffer[key] = [MagicMock()]

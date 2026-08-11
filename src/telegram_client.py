@@ -77,10 +77,18 @@ def create_telegram_client(
         except Exception as e:
             logger.exception("Error in Telegram message handler: %s", e)
 
-    @client.on(events.Disconnect)
-    async def _on_disconnect():
-        # L7: stale album state must not survive a reconnect/restart.
+    async def _watch_disconnect():
+        # Telethon has no events.Disconnect — the `disconnected` future
+        # resolves when the connection ends (intentional disconnect or a
+        # failed reconnection). Clear stale album state so it can't survive
+        # a reconnect/restart (L7).
+        try:
+            await client.disconnected
+        except OSError:
+            pass  # unexpected disconnect — still clear state below
         _clear_album_state()
+
+    asyncio.create_task(_watch_disconnect())
 
     return client
 
