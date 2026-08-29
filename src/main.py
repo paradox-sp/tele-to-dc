@@ -7,6 +7,7 @@ import threading
 from config import load_config
 from discord_client import create_discord_client
 from telegram_client import create_telegram_client
+from discord_user_client import create_discord_user_client, flush_forwarded_ids
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,10 +66,11 @@ async def run_bot() -> None:
         logger.error("Config error: %s", exc)
         sys.exit(1)
 
-    if not config.route_map:
+    if not config.route_map and not config.discord_route_map:
         logger.warning("No routes configured — bot will run but forward nothing.")
 
-    logger.info("Loaded %d route(s)", len(config.routes))
+    logger.info("Loaded %d Telegram route(s), %d Discord route(s)",
+                len(config.routes), len(config.discord_routes))
 
     discord_bot, send_payload, discord_loop = create_discord_client(config)
 
@@ -83,6 +85,7 @@ async def run_bot() -> None:
     )
 
     tg_client = None
+    dc_user_client = None
     try:
         # H2: surface Discord startup failures (e.g. invalid token) instead of
         # silently running with a dead bot. start() only completes early on failure.
@@ -97,12 +100,23 @@ async def run_bot() -> None:
 
         tg_client = create_telegram_client(config, send_payload_safe)
 
+        dc_user_client = create_discord_user_client(config)
+
         logger.info("Connecting to Telegram (first run will prompt for phone number)...")
         await tg_client.start()
         logger.info("Telegram connected.")
 
-        logger.info("Starting Discord bot...")
-        await tg_client.run_until_disconnected()
+        if dc_user_client:
+            logger.info("Starting Discord user client...")
+            tg_task = asyncio.create_task(tg_client.run_until_disconnected())
+            dc_task = asyncio.create_task(dc_user_client.start(config.discord_user.token))
+            # Wait for either side to stop; the finally block then closes both
+            # clients, releasing the other task so run_bot can return and the
+            # supervisor can restart on a clean Telegram disconnect.
+            await asyncio.wait({tg_task, dc_task}, return_when=asyncio.FIRST_COMPLETED)
+        else:
+            logger.info("Starting Discord bot...")
+            await tg_client.run_until_disconnected()
     except (asyncio.CancelledError, KeyboardInterrupt):
         raise
     except Exception as exc:
@@ -114,6 +128,9 @@ async def run_bot() -> None:
         # restarts.
         if tg_client is not None and tg_client.is_connected():
             await tg_client.disconnect()
+        if dc_user_client is not None and not dc_user_client.is_closed():
+            await dc_user_client.close()
+        await flush_forwarded_ids()
         async def _close_and_stop():
             await discord_bot.close()
             discord_loop.stop()

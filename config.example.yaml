@@ -11,6 +11,12 @@ discord:
   # Set to false to disable /route slash commands entirely (pure forwarding mode)
   commands_enabled: true
 
+discord_user:
+  # Discord user token (self-bot) — NOT a bot token.
+  # Get from browser devtools: Network tab → any request → Authorization header.
+  # ⚠️ Self-bots violate Discord ToS. Use at your own risk.
+  token: "your_user_token_here"
+
 media:
   # Files at or under this size are re-uploaded directly to Discord
   # Files over this limit use Catbox (if enabled) or show a notice
@@ -50,3 +56,16 @@ routes:
     # store: true  # only meaningful with SAVE_MEDIA_TO_DISK=true:
                    # send AND keep the downloaded file in the cache dir.
                    # unset/false = send, then delete the temp file.
+
+discord_routes:
+  # Each route maps a Discord source channel to a destination channel.
+  # Uses your user account (self-bot) to read source and forward to destination.
+  # Source channel ID: right-click channel → Copy Channel ID (enable Developer Mode).
+  # Destination channel ID: same way.
+  # Your user account must be in BOTH source and destination servers.
+  - name: "memes-forward"
+    from_channel: 1111111111111111111
+    to_channel: 2222222222222222222
+    media_types: ["image", "video"]
+    forward_delay_seconds: 1
+    track_message_ids: true

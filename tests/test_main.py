@@ -131,6 +131,9 @@ async def test_run_bot_cleans_up_when_discord_start_fails():
     config = SimpleNamespace(
         route_map={-1001: [123]},
         routes=[],
+        discord_routes=[],
+        discord_route_map={},
+        discord_user=SimpleNamespace(token=""),
         telegram=SimpleNamespace(session_name="s", api_id=1, api_hash="h"),
         discord=SimpleNamespace(token="tok", commands_enabled=False),
     )

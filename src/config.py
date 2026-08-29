@@ -46,6 +46,21 @@ class DiscordConfig:
 
 
 @dataclass
+class DiscordUserConfig:
+    token: str = ""
+
+
+@dataclass
+class DiscordRoute:
+    name: str
+    from_channel: int
+    to_channel: int
+    media_types: list[str] = field(default_factory=lambda: ["image", "video"])
+    forward_delay_seconds: float = 1.0
+    track_message_ids: bool = True
+
+
+@dataclass
 class Route:
     name: str
     from_chats: list[int]
@@ -61,10 +76,14 @@ class AppConfig:
     discord: DiscordConfig
     media: MediaConfig
     routes: list[Route]
+    discord_user: DiscordUserConfig = field(default_factory=DiscordUserConfig)
+    discord_routes: list[DiscordRoute] = field(default_factory=list)
     route_map: dict[int, list[int]] = field(default_factory=dict, init=False)
+    discord_route_map: dict[int, list[DiscordRoute]] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         self.route_map = _build_route_map(self.routes)
+        self.discord_route_map = _build_discord_route_map(self.discord_routes)
 
 
 def _build_route_map(routes: list[Route]) -> dict[int, list[int]]:
@@ -79,12 +98,22 @@ def _build_route_map(routes: list[Route]) -> dict[int, list[int]]:
     return route_map
 
 
+def _build_discord_route_map(routes: list[DiscordRoute]) -> dict[int, list[DiscordRoute]]:
+    route_map: dict[int, list[DiscordRoute]] = {}
+    for route in routes:
+        if route.from_channel not in route_map:
+            route_map[route.from_channel] = []
+        route_map[route.from_channel].append(route)
+    return route_map
+
+
 def load_config(path: str = "data/config.yaml") -> AppConfig:
     with open(path) as f:
         data = yaml.safe_load(f)
 
     tg = data["telegram"]
     dc = data["discord"]
+    dc_user = data.get("discord_user", {})
     media_data = data.get("media", {})
     catbox_data = media_data.get("catbox", {})
 
@@ -98,6 +127,18 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
         for r in data.get("routes", [])
     ]
 
+    discord_routes = [
+        DiscordRoute(
+            name=r["name"],
+            from_channel=int(r["from_channel"]),
+            to_channel=int(r["to_channel"]),
+            media_types=r.get("media_types", ["image", "video"]),
+            forward_delay_seconds=float(r.get("forward_delay_seconds", 1.0)),
+            track_message_ids=bool(r.get("track_message_ids", True)),
+        )
+        for r in data.get("discord_routes", [])
+    ]
+
     return AppConfig(
         telegram=TelegramConfig(
             api_id=int(tg["api_id"]),
@@ -107,6 +148,9 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
         discord=DiscordConfig(
             token=str(dc["token"]),
             commands_enabled=bool(dc.get("commands_enabled", True)),
+        ),
+        discord_user=DiscordUserConfig(
+            token=str(dc_user.get("token", "")),
         ),
         media=MediaConfig(
             max_upload_size_mb=int(media_data.get("max_upload_size_mb", 25)),
@@ -120,6 +164,7 @@ def load_config(path: str = "data/config.yaml") -> AppConfig:
             cache_dir=_env_str("MEDIA_CACHE_DIR", "data/media_cache"),
         ),
         routes=routes,
+        discord_routes=discord_routes,
     )
 
 
@@ -134,6 +179,7 @@ def save_config(config: AppConfig, path: str = "data/config.yaml") -> None:
             "token": config.discord.token,
             "commands_enabled": config.discord.commands_enabled,
         },
+        **({"discord_user": {"token": config.discord_user.token}} if config.discord_user.token else {}),
         "media": {
             "max_upload_size_mb": config.media.max_upload_size_mb,
             "catbox_max_upload_size_mb": config.media.catbox_max_upload_size_mb,
@@ -146,6 +192,17 @@ def save_config(config: AppConfig, path: str = "data/config.yaml") -> None:
         "routes": [
             {"name": r.name, "from": r.from_chats, "to": r.to_channels, "store": r.store}
             for r in config.routes
+        ],
+        "discord_routes": [
+            {
+                "name": r.name,
+                "from_channel": r.from_channel,
+                "to_channel": r.to_channel,
+                "media_types": r.media_types,
+                "forward_delay_seconds": r.forward_delay_seconds,
+                "track_message_ids": r.track_message_ids,
+            }
+            for r in config.discord_routes
         ],
     }
     # Atomic write: write to a temp file then replace, so a crash mid-write
